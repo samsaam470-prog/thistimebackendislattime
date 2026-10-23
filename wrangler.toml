@@ -1,0 +1,8 @@
+name = "thistimebackendislattime"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "interview-research-db"
+database_id = "e35c44e8-42b7-4b14-ad4a-d6fb6aa67a72"
