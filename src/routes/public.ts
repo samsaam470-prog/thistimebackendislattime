@@ -8,6 +8,7 @@ const publicRouter = new Hono<{ Bindings: Bindings }>();
 publicRouter.get('/:publicId', async (c) => {
   const db = c.env.DB;
   const publicId = c.req.param('publicId');
+  const branch = c.req.query('branch'); // optional: 'agency' | 'freelancer'
 
   const interview = await db.prepare(
     `SELECT id, title, description, status, version, public_id, created_at FROM interviews WHERE public_id = ?`
@@ -17,15 +18,34 @@ publicRouter.get('/:publicId', async (c) => {
   if (interview.status === 'draft') return c.json({ error: 'Interview is not published' }, 403);
   if (interview.status === 'inactive') return c.json({ error: 'This interview is no longer accepting responses.', inactive: true }, 410);
 
-  const { results: questions } = await db.prepare(
-    `SELECT id, question_text, question_type, instructions, is_required, display_order, page_number, answer_display_preference
-     FROM questions WHERE interview_id = ? ORDER BY display_order ASC`
-  ).bind(interview.id).all();
+  // Fetch all questions for pages 1 and 2 (both branches), plus the requested branch from page 3
+  let questionQuery: string;
+  let questionParams: any[];
+
+  if (branch === 'agency' || branch === 'freelancer') {
+    questionQuery = `
+      SELECT id, question_text, question_type, instructions, why_asking,
+             is_required, display_order, page_number, answer_display_preference, branch_side
+      FROM questions
+      WHERE interview_id = ? AND (page_number <= 2 OR branch_side = ?)
+      ORDER BY page_number ASC, display_order ASC`;
+    questionParams = [interview.id, branch];
+  } else {
+    questionQuery = `
+      SELECT id, question_text, question_type, instructions, why_asking,
+             is_required, display_order, page_number, answer_display_preference, branch_side
+      FROM questions
+      WHERE interview_id = ? AND page_number <= 2
+      ORDER BY page_number ASC, display_order ASC`;
+    questionParams = [interview.id];
+  }
+
+  const { results: questions } = await db.prepare(questionQuery).bind(...questionParams).all();
 
   const fullQuestions = [];
   for (const q of questions as any[]) {
     const { results: options } = await db.prepare(
-      `SELECT id, label, code, display_order FROM options WHERE question_id = ? ORDER BY display_order ASC`
+      `SELECT id, label, code, display_order, is_other FROM options WHERE question_id = ? ORDER BY display_order ASC`
     ).bind(q.id).all();
     fullQuestions.push({ ...q, options });
   }
@@ -36,6 +56,7 @@ publicRouter.get('/:publicId', async (c) => {
 const submissionSchema = z.object({
   participant_name: z.string().min(1),
   participant_email: z.string().email(),
+  branch: z.enum(['agency', 'freelancer']),
   answers: z.array(z.object({
     question_id: z.string().min(1),
     selected_option_ids: z.array(z.string()).optional().default([]),
@@ -60,15 +81,22 @@ publicRouter.post('/:publicId/submissions', async (c) => {
   const parsed = submissionSchema.safeParse(body);
   if (!parsed.success) return c.json({ error: 'Invalid submission', details: parsed.error.format() }, 400);
 
-  const { participant_name, participant_email, answers } = parsed.data;
+  const { participant_name, participant_email, branch, answers } = parsed.data;
 
   const { results: questions } = await db.prepare(
-    `SELECT id, is_required FROM questions WHERE interview_id = ?`
+    `SELECT id, is_required, page_number, branch_side FROM questions WHERE interview_id = ?`
   ).bind(interview.id).all();
 
-  const questionMap = new Map(questions.map((q: any) => [q.id, q]));
+  const applicable = new Map<string, any>();
+  for (const q of questions as any[]) {
+    if (q.page_number <= 2 || q.branch_side === 'both' || q.branch_side === branch) {
+      applicable.set(q.id, q);
+    }
+  }
 
   for (const q of questions as any[]) {
+    const applies = applicable.has(q.id);
+    if (!applies) continue;
     if (!q.is_required) continue;
     const userAns = answers.find(a => a.question_id === q.id);
     const hasChoice = userAns && userAns.selected_option_ids && userAns.selected_option_ids.length > 0;
@@ -79,8 +107,8 @@ publicRouter.post('/:publicId/submissions', async (c) => {
   }
 
   for (const ans of answers) {
-    if (!questionMap.has(ans.question_id)) {
-      return c.json({ error: `Invalid question ID ${ans.question_id}` }, 400);
+    if (!applicable.has(ans.question_id)) {
+      return c.json({ error: `Question ${ans.question_id} does not apply to branch "${branch}"` }, 400);
     }
   }
 
