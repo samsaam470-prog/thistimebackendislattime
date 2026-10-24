@@ -45,7 +45,7 @@ dashboardRouter.get('/interviews/:id/submissions', async (c) => {
   ).bind(interviewId).all();
 
   const { results: questions } = await db.prepare(
-    `SELECT id, question_text, display_order FROM questions WHERE interview_id = ? ORDER BY display_order ASC`
+    `SELECT id, question_text, display_order, branch_side FROM questions WHERE interview_id = ? ORDER BY display_order ASC`
   ).bind(interviewId).all();
 
   const detailed = [];
