@@ -11,41 +11,49 @@ const loginSchema = z.object({
 });
 
 authRouter.post('/login', async (c) => {
-  const { ADMIN_USER, ADMIN_PASS, JWT_KEY } = c.env;
-  if (!ADMIN_USER || !ADMIN_PASS || !JWT_KEY) {
-    return c.json({ error: 'config_error', message: 'Auth not configured.' }, 500);
-  }
+  try {
+    const { ADMIN_USER, ADMIN_PASS, JWT_KEY } = c.env;
+    if (!ADMIN_USER || !ADMIN_PASS || !JWT_KEY) {
+      return c.json({ error: 'config_error', message: 'Auth not configured.' }, 500);
+    }
 
-  const body = await c.req.json().catch(() => ({}));
-  const parsed = loginSchema.safeParse(body);
-  if (!parsed.success) {
-    return c.json({ error: 'invalid_payload', details: parsed.error.format() }, 400);
-  }
+    const body = await c.req.json().catch(() => ({}));
+    const parsed = loginSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: 'invalid_payload', details: parsed.error.format() }, 400);
+    }
 
-  const { username, password } = parsed.data;
-  if (username !== ADMIN_USER || password !== ADMIN_PASS) {
-    return c.json({ error: 'invalid_credentials', message: 'Invalid credentials.' }, 401);
-  }
+    const { username, password } = parsed.data;
+    if (username !== ADMIN_USER || password !== ADMIN_PASS) {
+      return c.json({ error: 'invalid_credentials', message: 'Invalid credentials.' }, 401);
+    }
 
-  const token = await createToken(username, JWT_KEY);
-  return c.json({ success: true, token, user: username }, 200);
+    const token = await createToken(username, JWT_KEY);
+    return c.json({ success: true, token, user: username }, 200);
+  } catch (err: any) {
+    return c.json({ error: 'login_error', message: err.message || String(err) }, 500);
+  }
 });
 
 authRouter.get('/me', async (c) => {
-  const JWT_KEY = c.env.JWT_KEY;
-  if (!JWT_KEY) {
-    return c.json({ authenticated: false }, 401);
+  try {
+    const JWT_KEY = c.env.JWT_KEY;
+    if (!JWT_KEY) {
+      return c.json({ authenticated: false }, 401);
+    }
+    const authHeader = c.req.header('Authorization') ?? '';
+    if (!authHeader.startsWith('Bearer ')) {
+      return c.json({ authenticated: false }, 401);
+    }
+    const token = authHeader.slice(7).trim();
+    const user = await verifyToken(token, JWT_KEY);
+    if (!user || user !== c.env.ADMIN_USER) {
+      return c.json({ authenticated: false }, 401);
+    }
+    return c.json({ authenticated: true, user });
+  } catch (err: any) {
+    return c.json({ authenticated: false, error: err.message || String(err) }, 500);
   }
-  const authHeader = c.req.header('Authorization') ?? '';
-  if (!authHeader.startsWith('Bearer ')) {
-    return c.json({ authenticated: false }, 401);
-  }
-  const token = authHeader.slice(7).trim();
-  const user = await verifyToken(token, JWT_KEY);
-  if (!user || user !== c.env.ADMIN_USER) {
-    return c.json({ authenticated: false }, 401);
-  }
-  return c.json({ authenticated: true, user });
 });
 
 export default authRouter;
