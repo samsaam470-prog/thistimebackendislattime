@@ -24,10 +24,12 @@ const questionSchema = z.object({
     'dropdown', 'short_text', 'long_text'
   ]),
   instructions: z.string().optional().nullable(),
+  why_asking: z.string().optional().nullable(),
   is_required: z.boolean().default(true),
   display_order: z.number().int().nonnegative(),
-  page_number: z.number().int().positive().default(1),
+  page_number: z.number().int().min(1).max(15),
   answer_display_preference: z.enum(['full', 'mapping']).default('full'),
+  branch_side: z.enum(['agency', 'freelancer', 'both']).default('both'),
   options: z.array(optionSchema).default([]),
   branch_group: z.string().optional().nullable(),
 });
@@ -46,18 +48,23 @@ async function insertQuestion(
 ): Promise<void> {
   const qId = q.id ?? generateId('q');
   await db.prepare(
-    `INSERT INTO questions (id, interview_id, question_text, question_type, instructions, is_required, display_order, page_number, answer_display_preference, branch_group, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO questions (
+      id, interview_id, question_text, question_type, instructions, why_asking,
+      is_required, display_order, page_number, answer_display_preference,
+      branch_side, branch_group, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).bind(
     qId,
     interviewId,
     q.question_text,
     q.question_type,
     q.instructions ?? null,
+    q.why_asking ?? null,
     q.is_required ? 1 : 0,
     q.display_order,
     q.page_number,
     q.answer_display_preference,
+    q.branch_side,
     q.branch_group ?? null,
     now,
     now
@@ -214,6 +221,21 @@ interviewsRouter.post('/:id/activate', async (c) => {
   const now = new Date().toISOString();
   await db.prepare(`UPDATE interviews SET status = 'published', updated_at = ? WHERE id = ?`).bind(now, id).run();
   return c.json({ success: true, status: 'published' });
+});
+
+// DELETE = freeze (marks as inactive, keeps all data)
+interviewsRouter.delete('/:id', async (c) => {
+  const db = c.env.DB;
+  const id = c.req.param('id');
+  const interview = await db.prepare(`SELECT * FROM interviews WHERE id = ?`).bind(id).first();
+  if (!interview) return c.json({ error: 'Interview not found.' }, 404);
+
+  const now = new Date().toISOString();
+  await db.prepare(
+    `UPDATE interviews SET status = 'inactive', updated_at = ? WHERE id = ?`
+  ).bind(now, id).run();
+
+  return c.json({ success: true, status: 'inactive', message: 'Interview frozen. Data preserved.' });
 });
 
 export default interviewsRouter;
